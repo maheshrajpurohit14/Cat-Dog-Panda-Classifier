@@ -53,11 +53,7 @@ Deployed using **Docker** on **Hugging Face Spaces**.
 
 ## 📁 Project Structure
 
-Cat-Dog-Pandas/  
-├── 🐳 Dockerfile  
-├── 📱 app.py  
-├── 📈 metrics.json  
-├── 🧠 model.pth  
+Cat-Dog-Pandas/   
 ├── 📓 Project.ipynb  
 ├── 📋 requirements.txt  
 ├── 🖼️ confusion_matrix.png  
@@ -66,34 +62,84 @@ Cat-Dog-Pandas/
 
 ---
 
-## ⚙️ Dockerfile (Used in this Project)
+## ⚙️ Project.py (Used in this Project)
 
-```dockerfile
-FROM python:3.9-slim
+```
+num_epochs = 20
+early_stopping = EarlyStopping(patience=5, min_delta=0.001)
+train_losses, val_losses = [], []
+train_accs, val_accs = [], []
+best_val_acc = 0.0
+start_time  = time.time()
 
-WORKDIR /app
+for epoch in range(num_epochs):
+    model.train()
+    running_loss, correct_train, total_train = 0.0, 0, 0
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+    # Wrap train_loader with tqdm
+    train_loader_tqdm = tqdm(train_loader, desc=f"Epoch [{epoch+1}/{num_epochs}] Training")
+    
+    for images, labels in train_loader_tqdm:
+        images, labels = images.to(device), labels.to(device)
 
-COPY requirements.txt .
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
 
-RUN pip3 install --no-cache-dir -r requirements.txt
+        running_loss += loss.item() * images.size(0)
+        _, predicted = outputs.max(1)
+        total_train += labels.size(0)
+        correct_train += (predicted == labels).sum().item()
 
-COPY . .
+        # Update tqdm bar postfix with running metrics
+        train_loader_tqdm.set_postfix({'loss': f"{loss.item():.4f}"})
 
-RUN useradd -m -u 1000 user && \
-    chown -R user:user /app
-USER user
+    train_loss = running_loss / total_train
+    train_acc = correct_train / total_train
+    train_losses.append(train_loss)
+    train_accs.append(train_acc)
 
-EXPOSE 7860
+    # Validation
+    model.eval()
+    val_loss, correct_val, total_val = 0.0, 0, 0
+    val_loader_tqdm = tqdm(val_loader, desc=f"Epoch [{epoch+1}/{num_epochs}] Validation")
+    
+    with torch.no_grad():
+        for images, labels in val_loader_tqdm:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            val_loss += loss.item() * images.size(0)
+            _, predicted = outputs.max(1)
+            total_val += labels.size(0)
+            correct_val += (predicted == labels).sum().item()
 
-HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health
+            val_loader_tqdm.set_postfix({'loss': f"{loss.item():.4f}"})
 
-CMD ["streamlit","run","app.py","--server.port=7860","--server.address=0.0.0.0","--server.enableXsrfProtection=false","--server.enableCORS=false","--server.maxUploadSize=50"]
+    val_loss /= total_val
+    val_acc = correct_val / total_val
+    val_losses.append(val_loss)
+    val_accs.append(val_acc)
+
+    
+    # Final log for the epoch
+    print(f"Epoch [{epoch+1}/{num_epochs}] "
+          f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} "
+          f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+    if val_acc > best_val_acc:
+        best_val_acc = val_acc
+        torch.save(model.state_dict(), 'model.pth')
+        print(f"💾 Saved best model with val_acc: {val_acc:.4f}")
+
+    early_stopping(val_loss)
+    if early_stopping.early_stop:
+        print(f"⏹ Early stopping triggered at epoch {epoch+1}")
+        break
+
+end_time = time.time()
+print(f"\nTraining completed in {(end_time - start_time)/60:.1f} minutes")
 ---
 ```
 
